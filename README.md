@@ -9,5 +9,9 @@ bash init.sh
 ## Usage
 
 ```
-python3 main.py "Hello"
+./main.py "Hello"
+
+./main.py "Is apple a fruit" -m dpsk32
+
+cat code.cpp | ./main.py "Help me with this code" -m dpsk32
 ```

@@ -1,7 +1,9 @@
+#!/usr/bin/env python
+
+import click
+import json
 import requests
 import sys
-import json
-import click
 
 from api.ollama import OllamaApi
 
