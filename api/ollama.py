@@ -12,7 +12,7 @@ import marshal
 class OllamaApi:
     def __init__(self, config_path):
         self.config = self.get_config(config_path)
-        self.url = f"https://{self.config['ollama_endpoint']}/api/"
+        self.url = f"{'https' if self.config['ssl_connection'] else 'http'}://{self.config['ollama_endpoint']}/api/"
         self.load()
 
     def __del__(self):
