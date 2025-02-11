@@ -134,8 +134,11 @@ class OllamaApi:
                             stage += 1
                     elif stage == 1:
                         content = re.sub(r"^[\s\n]*", "", content)
-                        if content:
-                            stage += 1
+                        if content == '</think>':
+                            stage = 3
+                            content = ""
+                        elif content:
+                            stage = 2
                     elif stage == 2:
                         if content == '</think>':
                             content = ""
@@ -268,8 +271,11 @@ class OllamaApi:
                             stage += 1
                     elif stage == 1:
                         content = re.sub(r"^[\s\n]*", "", content)
-                        if content:
-                            stage += 1
+                        if content == '</think>':
+                            stage = 3
+                            content = ""
+                        elif content:
+                            stage = 2
                     elif stage == 2:
                         if content == '</think>':
                             content = ""
