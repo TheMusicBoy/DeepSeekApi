@@ -9,9 +9,21 @@ import re
 import marshal
 
 
+class OllamaObjectNotFoundException(Exception):
+    pass
+
+
+class OllamaBadRequestException(Exception):
+    pass
+
+
+class OllamaInternalExceptionException(Exception):
+    pass
+
+
 class OllamaApi:
-    def __init__(self, config_path):
-        self.config = self.get_config(config_path)
+    def __init__(self, config_dir=os.path.expanduser('~/.config/ollama_api')):
+        self.load_config(config_dir)
         self.url = f"{'https' if self.config['ssl_connection'] else 'http'}://{self.config['ollama_endpoint']}/api/"
         self.load()
 
@@ -37,43 +49,48 @@ class OllamaApi:
         else:
             return text
 
-    def get_config(self, config_dir):
-        try:
-            os.makedirs(config_dir)
-        except FileExistsError:
-            pass
+    def load_config(self, config_dir):
+        self.config = {
+            'ollama_endpoint': '89.169.145.6:8080',
+            'cache_path': os.path.join(config_dir, 'cache.bin'),
+            'ssl_connection': True
+        }
 
-        config_path = os.path.join(config_dir, 'config.json')
-
         try:
+            config_path = os.path.join(config_dir, 'config.json')
             with open(config_path, 'r') as file:
-                return json.load(file)
+                self.config |= json.load(file)
         except Exception:
-            with open(config_path, 'w+') as file:
-                data = {
-                    'ollama_endpoint': '89.169.145.6:8080',
-                    'chat_data_path': os.path.join(config_dir, 'chat_data.bin'),
-                }
-                json.dump(data, file)
-                return data
+            pass
 
     def get_url(self, method):
         return self.url + method
+    
+    def get_chat(self, chat_id, autocreate=True):
+        if autocreate and chat_id not in self.data['chat_list']:
+            self.data['chat_list'][chat_id] = {
+                'messages': [],
+                'tags': set()
+            }
+        return self.data['chat_list'][chat_id] 
+
+    def set_chat(self, chat_id, data):
+        self.data['chat_list'][chat_id] = data
 
     def load(self):
+        self.data = {
+            "chat_list" : {
+            }
+        }
         try:
-            with open(self.config['chat_data_path'], "rb") as file:
-                self.chat_data = marshal.load(file)
-        except FileNotFoundError:
-            self.chat_data = {}
-        except TypeError:
-            self.chat_data = {}
-        except ValueError:
-            self.chat_data = {}
+            with open(self.config['cache_path'], "rb") as file:
+                self.data = marshal.load(file)
+        except Exception:
+            pass
 
     def dump(self):
-        with open(self.config['chat_data_path'], "wb+") as file:
-            marshal.dump(self.chat_data, file)
+        with open(self.config['cache_path'], "wb+") as file:
+            marshal.dump(self.data, file)
 
     def generate(self, model, prompt, options={}):
         try:
@@ -142,11 +159,11 @@ class OllamaApi:
                     elif stage == 2:
                         if content == '</think>':
                             content = ""
-                            stage += 1
+                            stage = 3
                     elif stage == 3:
                         content = re.sub(r"^[\s\n]*", "", content)
                         if content:
-                            stage += 1
+                            stage = 4
 
                     return content, stage
 
@@ -162,6 +179,10 @@ class OllamaApi:
                                 json_data = json.loads(buffer)
                                 if 'response' in json_data:
                                     text, stage = process(json_data['response'], stage)
+
+                                    if not text:
+                                        continue
+
                                     yield text, stage > 2
                                 if 'done' in json_data and json_data['done']:
                                     return
@@ -174,7 +195,7 @@ class OllamaApi:
 
     def chat(self, chat_id, model, prompt, options={}):
         try:
-            messages = self.chat_data.get(chat_id, [])
+            messages = self.get_chat(chat_id)['messages']
             messages.append({
                 "role": "user",
                 "think": None,
@@ -219,7 +240,7 @@ class OllamaApi:
                                         "think": think,
                                         "text": text
                                     })
-                                    self.chat_data[chat_id] = messages
+                                    self.data['chat_list'][chat_id] = messages
                                     return think, text
                                 buffer = b""
                             except json.JSONDecodeError:
@@ -230,7 +251,7 @@ class OllamaApi:
 
     def chat_stream(self, chat_id, model, prompt, options={}):
         try:
-            messages = self.chat_data.get(chat_id, [])
+            messages = self.get_chat(chat_id)['messages']
             messages.append({
                 "role": "user",
                 "think": None,
@@ -266,6 +287,7 @@ class OllamaApi:
 
                 def process(content, stage):
                     if stage == 0:
+                        content = content.strip()
                         if content == '<think>':
                             content = ""
                             stage += 1
@@ -279,11 +301,11 @@ class OllamaApi:
                     elif stage == 2:
                         if content == '</think>':
                             content = ""
-                            stage += 1
+                            stage = 3
                     elif stage == 3:
                         content = re.sub(r"^[\s\n]*", "", content)
                         if content:
-                            stage += 1
+                            stage = 4
 
                     return content, stage
 
@@ -300,16 +322,19 @@ class OllamaApi:
                                 if 'message' in json_data:
                                     text, stage = process(json_data['message']['content'], stage)
 
-                                    if stage < 2:
-                                        message['think'] += text
-                                    else:
+                                    if stage > 2:
                                         message['text'] += text
+                                    else:
+                                        message['think'] += text
                     
                                     buffer = b""
+                                    if not text:
+                                        continue
+
                                     yield text, stage > 2
                                 if 'done' in json_data and json_data['done']:
                                     messages.append(message)
-                                    self.chat_data[chat_id] = messages
+                                    self.data['chat_list'][chat_id]['messages'] = messages
                                     return
                                 buffer = b""
                             except json.JSONDecodeError:
@@ -319,41 +344,39 @@ class OllamaApi:
             print(f"Error: {e}")
 
     def delete_chat(self, chat_id):
-        if chat_id not in self.chat_data:
-            print(f"No chat with name '{chat_id}'")
+        if chat_id not in self.data['chat_list']:
+            raise OllamaObjectNotFoundException(f"No chat with name '{chat_id}'")
         else:
-            del self.chat_data[chat_id]
+            del self.data['chat_list'][chat_id]
 
     def chat_from_message(self, chat_id, message_id, model, prompt, options={}):
-        if chat_id not in self.chat_data:
-            print(f"No chat with name '{chat_id}'")
+        if chat_id not in self.data['chat_list']:
+            raise OllamaObjectNotFoundException(f"No chat with name '{chat_id}'")
 
-        if message_id >= len(self.chat_data[chat_id]):
-            print(f"No message {chat_id} in chat '{chat_id}'")
+        if message_id >= len(self.data['chat_list'][chat_id]):
+            raise OllamaObjectNotFoundException(f"No message {message_id} in chat '{chat_id}'")
 
-        messages = self.chat_data.get(chat_id)[:message_id]
-
+        messages = self.data['chat_list'][chat_id][:message_id]
         return self.chat(chat_id, model, prompt, options)
 
     def chat_from_message_stream(self, chat_id, message_id, model, prompt, options={}):
-        if chat_id not in self.chat_data:
-            print(f"No chat with name '{chat_id}'")
+        if chat_id not in self.data['chat_list']:
+            raise OllamaObjectNotFoundException(f"No chat with name '{chat_id}'")
 
-        if message_id >= len(self.chat_data[chat_id]):
-            print(f"No message {chat_id} in chat '{chat_id}'")
+        if message_id >= len(self.data['chat_list'][chat_id]):
+            raise OllamaObjectNotFoundException(f"No message {message_id} in chat '{chat_id}'")
 
-        messages = self.chat_data.get(chat_id)[:message_id]
-
+        messages = self.data.get(chat_id)[:message_id]
         for token in self.chat_stream(chat_id, model, prompt, options):
             yield token
 
     def chat_list(self):
         result = []
 
-        for chat_name, message in self.chat_data.items():
-            result.append(chat_name)
+        for chat_name, data in self.data['chat_list'].items():
+            result.append({
+                'id': chat_name,
+                'tags': data['tags']
+            })
 
         return result
-
-    def get_chat(self, chat_id):
-        return self.chat_data.get(chat_id, [])

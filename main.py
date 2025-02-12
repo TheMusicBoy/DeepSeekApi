@@ -3,12 +3,13 @@
 import click
 import json
 import requests
+import os
 import sys
 
 from api.ollama import OllamaApi
 
 
-DEFAULT_CONFIG_PATH = "/home/painfire/.config/dpsk"
+DEFAULT_CONFIG_PATH = os.path.expanduser('~/.config/dpsk')
 
 
 class Printer:
@@ -27,13 +28,12 @@ class Printer:
         self.current_mode = 0
 
     def chunkPrint(self, text):
-        print(text)
         if self.chunk_align == 0:
             print(text, end="", flush=True)
         else:
             for i in range(0, len(text), self.chunk_align):
                 data_size = min(len(text) - i, self.chunk_align)
-                chunk = text[i:len(text) - data_size] + ' ' * (self.chunk_align - data_size)
+                chunk = text[i:i + data_size] + ' ' * (self.chunk_align - data_size)
                 print(chunk, end="", flush=True)
 
     def token_print(self, text, mode):
@@ -81,7 +81,7 @@ class Printer:
                     'thoughts': '',
                     'out_loud': out_loud,
                 },
-                'done': True
+                'done': False
             }
             if self.print_think:
                 data['content']['thoughts'] = thoughts
@@ -91,14 +91,34 @@ class Printer:
     def print_list(self, obj):
         if self.format == 'text':
             for element in obj:
-                self.chunkPrint(element)
+                self.chunkPrint(f"{element['id']} -- tags: {', '.join(element['tags'])}")
         elif self.format == 'json':
             data = {
                 'list': obj,
-                'done': True
+                'done': False
             }
             self.chunkPrint(json.dumps(data))
 
+    def print_messages(self, obj):
+        if self.format == 'text':
+            for e in obj:
+                self.chunkPrint(f"{e['role'] if e['role'] != 'user' else 'you'}: {e['text']}\n")
+        elif self.format == 'json':
+            data = {
+                'messages': obj,
+                'done': False
+            }
+            self.chunkPrint(json.dumps(data))
+
+    def print_exception(self, ex):
+        if self.format == 'text':
+            print(f"Error: {ex}")
+        elif self.format == 'json':
+            data = {
+                'exception': ex,
+                'done': False
+            }
+            self.chunkPrint(json.dumps(data))
 
     def finish(self):
         if self.format == 'text':
@@ -204,7 +224,7 @@ def do_chat(chat_id, model, stream, think, format, prompt):
 
     printer = Printer(think, format)
     if (stream):
-        for token, out_loud in ollama.generate_stream(model, prompt):
+        for token, out_loud in ollama.chat_stream(chat_id, model, prompt):
             printer.token_print(token, out_loud)
         printer.finish()
     else:
@@ -217,17 +237,37 @@ def do_chat(chat_id, model, stream, think, format, prompt):
 def do_list(format):
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
     printer = Printer(False, format)
-    for chat_name in ollama.chat_list():
-        print(chat_name)
+    printer.print_list(ollama.chat_list())
+
 
 chat_id_argument = click.argument('chat_id', nargs=1)
 
 
 @cli.command(name='delete', help='delete chat')
 @chat_id_argument
-def do_delete(chat_id):
+@format_option
+def do_delete(chat_id, format):
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
-    ollama.delete_chat(chat_id)
+    printer = Printer(False, format)
+    try:
+        ollama.delete_chat(chat_id)
+    except Exception as ex:
+        printer.print_exception(ex)
+    printer.finish()
+
+
+@cli.command(name='messages', help='get chat messages')
+@chat_id_argument
+@format_option
+def do_messages(chat_id, format):
+    ollama = OllamaApi(DEFAULT_CONFIG_PATH)
+    printer = Printer(False, format)
+    try:
+        chat_data = ollama.get_chat(chat_id)
+        printer.print_messages(chat_data['messages'])
+    except Exception as ex:
+        printer.print_exception(ex)
+    printer.finish()
 
 
 if __name__ == "__main__":
