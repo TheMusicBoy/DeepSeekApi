@@ -22,8 +22,7 @@ class Printer:
             self.format = result[0]
             self.chunk_align = int(result[1])
 
-    def __init__(self, print_think, format_option):
-        self.print_think = print_think
+    def __init__(self, format_option):
         self.applyFormat(format_option)
         self.current_mode = 0
 
@@ -36,56 +35,15 @@ class Printer:
                 chunk = text[i:i + data_size] + ' ' * (self.chunk_align - data_size)
                 print(chunk, end="", flush=True)
 
-    def token_print(self, text, mode):
-        if not self.print_think and not mode:
-            return
-
+    def token_print(self, text):
         if self.format == 'text':
-            if self.print_think:
-                if self.current_mode == 0 and mode == False:
-                    self.chunkPrint('--- Thinking... ---\n')
-                    self.current_mode = 1
-                elif self.current_mode == 1 and mode == True:
-                    self.chunkPrint('\n--- Printing result... ---\n')
-                    self.current_mode = 2
-
             self.chunkPrint(text)
         elif self.format == 'json':
             data = {
                 'out_loud': mode,
-                'content': {
-                    'thoughts': '',
-                    'out_loud': '',
-                },
+                'content': text,
                 'done': False
             }
-
-            if mode:
-                data['content']['out_loud'] = text
-            else:
-                data['content']['thoughts'] = text
-
-            self.chunkPrint(json.dumps(data))
-
-    def print_text(self, thoughts, out_loud):
-        if self.format == 'text':
-            if self.print_think:
-                self.chunkPrint(f"--- Thinking... ---\n{thoughts}\n--- Printing result... ---\n{out_loud}")
-            else:
-                self.chunkPrint(out_loud)
-            self.finish()
-        elif self.format == 'json':
-            data = {
-                'out_loud': True,
-                'content': {
-                    'thoughts': '',
-                    'out_loud': out_loud,
-                },
-                'done': False
-            }
-            if self.print_think:
-                data['content']['thoughts'] = thoughts
-
             self.chunkPrint(json.dumps(data))
 
     def print_list(self, obj):
@@ -102,7 +60,7 @@ class Printer:
     def print_messages(self, obj):
         if self.format == 'text':
             for e in obj:
-                self.chunkPrint(f"{e['role'] if e['role'] != 'user' else 'you'}: {e['text']}\n")
+                self.chunkPrint(f"{e['role'] if e['role'] != 'user' else 'you'}: {e['content']}\n")
         elif self.format == 'json':
             data = {
                 'messages': obj,
@@ -157,13 +115,6 @@ stream_option = click.option(
 )
 
 
-think_option = click.option(
-    '--think/--no-think',
-    default=True,
-    help="Print think"
-)
-
-
 prompt_argument = click.argument(
     'prompt',
     nargs=-1
@@ -173,10 +124,9 @@ prompt_argument = click.argument(
 @cli.command(name='generate', help='generate single text by prompt')
 @model_option
 @stream_option
-@think_option
 @format_option
 @prompt_argument
-def do_generate(model, stream, think, format, prompt):
+def do_generate(model, stream, format, prompt):
     prompt = ' '.join(prompt)
 
     if not sys.stdin.isatty():
@@ -187,13 +137,13 @@ def do_generate(model, stream, think, format, prompt):
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
 
     if (stream):
-        printer = Printer(think, format)
+        printer = Printer(format)
         for token, out_loud in ollama.generate_stream(model, prompt):
             printer.token_print(token, out_loud)
-        printer.finish()
     else:
-        think, text = ollama.generate(model, prompt)
-        print(f"--- Thinking... ---\n{think}\n--- Printing result... ---\n{text}", flush=True)
+        text = ollama.generate(model, prompt)
+        printer.token_print(text)
+    printer.finish()
 
 
 chat_id_option = click.option(
@@ -208,10 +158,9 @@ chat_id_option = click.option(
 @chat_id_option
 @model_option
 @stream_option
-@think_option
 @format_option
 @prompt_argument
-def do_chat(chat_id, model, stream, think, format, prompt):
+def do_chat(chat_id, model, stream, format, prompt):
     chat_id = chat_id.strip()
     prompt = ' '.join(prompt)
 
@@ -222,21 +171,21 @@ def do_chat(chat_id, model, stream, think, format, prompt):
 
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
 
-    printer = Printer(think, format)
+    printer = Printer(format)
     if (stream):
-        for token, out_loud in ollama.chat_stream(chat_id, model, prompt):
+        for token in ollama.chat_stream(chat_id, model, prompt):
             printer.token_print(token, out_loud)
-        printer.finish()
     else:
-        thoughts, out_loud = ollama.chat(chat_id, model, prompt)
-        printer.print_text(thoughts, out_loud)
+        text = ollama.chat(chat_id, model, prompt)
+        printer.token_print(thoughts, out_loud)
+    printer.finish()
 
 
 @cli.command(name='list', help='list of chats')
 @format_option
 def do_list(format):
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
-    printer = Printer(False, format)
+    printer = Printer(format)
     printer.print_list(ollama.chat_list())
 
 
@@ -248,7 +197,7 @@ chat_id_argument = click.argument('chat_id', nargs=1)
 @format_option
 def do_delete(chat_id, format):
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
-    printer = Printer(False, format)
+    printer = Printer(format)
     try:
         ollama.delete_chat(chat_id)
     except Exception as ex:
@@ -261,7 +210,7 @@ def do_delete(chat_id, format):
 @format_option
 def do_messages(chat_id, format):
     ollama = OllamaApi(DEFAULT_CONFIG_PATH)
-    printer = Printer(False, format)
+    printer = Printer(format)
     try:
         chat_data = ollama.get_chat(chat_id)
         printer.print_messages(chat_data['messages'])
